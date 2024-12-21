@@ -29,7 +29,10 @@ contract ContractTest is Deployers {
         assertEq(core.owner(), owner);
     }
 
-    function test_Connector() public view {
+    function test_Connector() public {
+        vm.prank(owner);
+        core.setConnector(address(connector));
+
         assertEq(core.connector(), address(connector));
     }
 

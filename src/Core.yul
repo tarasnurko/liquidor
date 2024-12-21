@@ -2,10 +2,11 @@
 -- STORAGE LAYOUT --
 slot 0          - owner address
 slot 1          - connector address
+slot 2          - protocol stETH savings
 
 slot 0x1000     - mapping(address token => Data)
      0x00       - totalDeposits
-     0x20       - totalShares                                                      
+     0x20       - totalShares                                                    
 
 slot 0x10000    - mapping(address account => mapping(address token => uint256 shares)) userShares
 
@@ -113,13 +114,28 @@ object "Core" {
                 // - if userSharesBalance < shares -> 1 -> iszero(1) -> false -> revert
                 // - if userSharesBalance >= shares -> 0 -> iszero(0) -> true -> not revert
                 require(iszero(lt(userSharesBalance, shares)))
-                
-                // TODO: add logic to calculate shares -> assets
-                // add logic to calculate profit (earned yield per user shares)
 
-                // TODO: reduce total token deposits and shares
+                let totalDeposits := tokenDeposits(token)
+                let aTokenAmount := getATokenBalance(token)
 
-                reduceAccountTokenShares(caller(), token, shares)
+                let totalGains := sub(aTokenAmount, totalDeposits)
+
+                let protocolFee := div(totalGains, 20) // 5%, for example 100 / 20 = 5, as we want
+                let usersGains := sub(totalGains, protocolFee)
+                // TODO: manage protocol fees
+
+                // generated yield increase total deposit without increasing shares
+                // that means each share costs more (contain more token then at deposit)
+                addTokenDeposits(token, usersGains)
+
+                let assets := convertToAssets(token, shares)
+
+                // after we calculated amount of assets reduce this amount of assets, and do not forget to reduce amount of shares
+                reduceTokenDeposits(token, assets)
+                reduceTokenShares(token, shares)
+                reduceAccountTokenShares(caller(), token, shares) 
+
+                withdrawFromAave(caller(), token, assets)
             }
 
             function borrow(borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount) {
@@ -254,6 +270,12 @@ object "Core" {
                 sstore(offset, add(prevValue, amount))
             }
 
+            function reduceTokenDeposits(token, amount) {
+                let offset := tokenToStorageOffset(token)
+                let prevValue := tokenDeposits(token)
+                sstore(offset, sub(prevValue, amount))
+            }
+
             /**
              * @param token - deposited token address
              * @param amount - deposited token shares to add
@@ -263,6 +285,13 @@ object "Core" {
                 let prevValue := tokenShares(token)
                 sstore(offset, add(prevValue, amount))
             }
+
+            function reduceTokenShares(token, amount) {
+                let offset := tokenSharesStorageOffset(token)
+                let prevValue := tokenShares(token)
+                sstore(offset, sub(prevValue, amount))
+            }
+
 
             /* --- Account shares --- */  
 
@@ -344,6 +373,73 @@ object "Core" {
                 }
             }
 
+            function withdrawFromAave(depositor, token, amount) {
+                let ptr := mload(0x40)
+                
+                // withdraw(address,address,uint256) -> 0xd9caed12
+                mstore(ptr, 0xd9caed1200000000000000000000000000000000000000000000000000000000)
+                
+                mstore(add(ptr, 0x04), and(depositor, 0xffffffffffffffffffffffffffffffffffffffff))  // depositor address
+                mstore(add(ptr, 0x24), and(token, 0xffffffffffffffffffffffffffffffffffffffff))      // token address
+                mstore(add(ptr, 0x44), amount)                                                       // amount
+                
+                // Update free memory pointer
+                mstore(0x40, add(ptr, 0x64))
+                
+                // Make the call
+                let success := call(
+                    gas(),            // gas
+                    connector(),  // target contract
+                    0,               // no ETH value
+                    ptr,             // input pointer
+                    0x64,            // input size (4 + 32 * 3 = 100 bytes)
+                    ptr,             // output pointer
+                    0                // output size (no return value expected)
+                )
+                
+                // Check if call was successful
+                if iszero(success) {
+                    // Forward any revert message
+                    returndatacopy(ptr, 0, returndatasize())
+                    revert(ptr, returndatasize())
+                }
+            }
+
+            function getATokenBalance(token) -> v {  
+                // clear slots before usage
+                mstore(0x00, 0)
+                mstore(0x20, 0)
+
+                // getATokenBalance(address) -> 0x0712f6b3
+                mstore(0x00, 0x0712f6b300000000000000000000000000000000000000000000000000000000)
+
+                mstore(0x04, and(token, 0xffffffffffffffffffffffffffffffffffffffff))  // token address 
+
+                let ptr := mload(0x40)
+                
+                // Make the call
+                let success := call(
+                    gas(),            // gas
+                    connector(),      // target contract
+                    0,                // no ETH value
+                    0x00,             // input pointer
+                    0x24,             // input size (4 + 32 = 36 bytes)
+                    ptr,              // output pointer
+                    0x20              // output size (no return value expected)
+                )
+
+                mstore(0x40, add(ptr, 0x20)) // update free memory pointer
+                
+                // Check if call was successful
+                if iszero(success) {
+                    // Forward any revert message
+                    returndatacopy(ptr, 0, returndatasize())
+                    revert(ptr, returndatasize())
+                }
+ 
+                v := mload(0x00)
+            }
+
             /****************************************/
             /*     Calldata decoding functions      */
             /****************************************/
@@ -363,6 +459,15 @@ object "Core" {
                     revert(0, 0)
                 }
                 v := calldataload(pos)
+            }
+
+            /****************************************/
+            /*           Constants (almost)         */
+            /****************************************/
+
+            // 1e18
+            function WAD() -> v {
+                v := 1000000000000000000
             }
 
             /****************************************/

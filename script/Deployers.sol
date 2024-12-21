@@ -20,6 +20,5 @@ contract Deployers is Test {
         connector = new Connector(aavePool, address(core));
 
         core.setOwner(owner);
-        core.setConnector(address(connector));
     }
 }
