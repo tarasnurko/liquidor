@@ -1,3 +1,16 @@
+/*
+-- STORAGE LAYOUT --
+slot 0          - owner address
+slot 1          - 
+
+slot 0x1000     - mapping(address token => Data)
+     0x00       - totalDeposits
+     0x20       - totalShares                                                      
+
+slot 0x10000    - mapping(address account => mapping(address token => uint256 shares)) userShares
+
+*/
+
 object "Core" {
     code {
         // Constructor
@@ -125,17 +138,102 @@ object "Core" {
 
         function ownerPos() -> p { p := 0 }
 
+        /* --- Tokens --- */
+
+        // total token depoists offset
+        function tokenToStorageOffset(token) -> offset {
+            offset := getMappingOffset(0x1000, token)
+        }
+
+        // total token shares offset
+        function tokenSharesStorageOffset(token) -> offset {
+            offset := tokenToStorageOffset(token)
+            offset := add(0x20, offset)
+        }
+
+        /* --- Account shares --- */
+
+        function accountTokenToSharesStorageOffset(account, token) -> offset {
+            offset := getMappingOffset(0x10000, token) // inner mapping key
+            offset := getNestedMappingOffset(offset, account)
+        }
+
         /****************************************/
         /*             Storage read             */
         /****************************************/
 
-        function owner() -> o {
-            o := sload(ownerPos())
+        /* --- Global --- */
+
+        function owner() -> v {
+            v := sload(ownerPos())
+        }
+
+        // total token deposits
+        function tokenDeposits(token) -> v {
+            offset := tokenToStorageOffset(token)
+            v := sload(offset)
+        }
+
+        function tokenShares(token) -> v {
+            offset := tokenSharesStorageOffset(token)
+            v := sload(offset)
+        }
+
+        /* --- Account shares --- */  
+
+        function accountTokenShares(account, token) -> v {
+            offset := accountTokenToSharesStorageOffset(account, token)
+            v := sload(offset)
+        }
+
+        /****************************************/
+        /*            Storage changes           */
+        /****************************************/
+
+        /**
+         * @param token - deposited token address
+         * @param amount - deposited token amount to add
+         */  
+        function addTokenDeposits(token, amount) {
+            offset := tokenToStorageOffset(token)
+            prevValue := tokenDeposits(token)
+            sstore(offset, add(prevValue, amount))
+        }
+
+        /**
+         * @param token - deposited token address
+         * @param amount - deposited token shares to add
+         */        
+        function addTokenShares(token, amount) {
+            offset := tokenSharesStorageOffset(token)
+            prevValue := tokenShares(token)
+            sstore(offset, add(prevValue, amount))
+        }
+
+        /* --- Account shares --- */  
+
+        /**
+         * @param amount - amount of shares to add to account in specified token
+        */
+        function addAccountTokenShares(account, token, amount) {
+            offset := accountTokenToSharesStorageOffset(account, token)
+            prevValue := accountTokenShares(account, token)
+            sstore(offset, add(prevValue, amount))
+        }
+
+        /**
+         * @param amount - amount of shares to reduce from account in specified token
+        */
+        function reduceAccountTokenShares(account, token, amount) {
+            offset := accountTokenToSharesStorageOffset(account, token)
+            prevValue := accountTokenShares(account, token)
+            sstore(offset, sub(prevValue, amount))
         }
 
         /****************************************/
         /*     Calldata decoding functions      */
         /****************************************/
+
         // https://docs.soliditylang.org/en/latest/yul.html#complete-erc20-example
         function decodeAsAddress(offset) -> v {
             v := decodeAsUint(offset)
@@ -172,5 +270,18 @@ object "Core" {
             mstore(0x40, add(ptr, size))
         }
 
+        // for regular or inner mappings
+        function getMappingOffset(slot, key) -> offset {
+            mstore(0x00, key) 
+            mstore(0x20, slot)  
+            offset := keccak256(0x00, 0x40)
+        }
+
+        // for nested mapings
+        function getNestedMappingOffset(mappingOffset, key) -> offset {
+            mstore(0x00, key) 
+            mstore(0x20, mappingOffset)  
+            offset := keccak256(0x00, 0x40)
+        }
     }
 }
