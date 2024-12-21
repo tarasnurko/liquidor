@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IPool} from "@aave-v3-core/interfaces/IPool.sol";
 import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+import {IDistributorV4} from "src/interfaces/IDistributorV4.sol";
 
 contract Connector is AccessControl {
     using SafeERC20 for IERC20;
@@ -16,21 +17,30 @@ contract Connector is AccessControl {
     IPool public immutable aavePool;
     ISwapRouter public immutable uniswapV3Router;
     address public immutable stETHAddress;
+    IDistributorV4 morpheusDistributorV4;
 
     uint256 public protocolStETHAmount;
+    uint256 public rewardThresholdToLock;
+    address public rewardReceiver;
+    uint256 public lastMorpheusInteractionTime = block.timestamp;
+
+    uint256 public constant MORPHEUS_WITHDRAW_COOLDOWN = 60 days;
 
     constructor(
         address _core,
         address _aavePool,
         address _uniswapV3Router,
         address _stETHAddress,
-        address _morpheusListener
+        address _morpheusListener,
+        address _morpheusDistributorV4
     ) {
         aavePool = IPool(_aavePool);
         uniswapV3Router = ISwapRouter(_uniswapV3Router);
         stETHAddress = _stETHAddress;
+        morpheusDistributorV4 = IDistributorV4(_morpheusDistributorV4);
 
         _grantRole(CORE_ROLE, _core);
+        _grantRole(MORPHEUS_LISTENER, _morpheusListener);
     }
 
     function deposit(
@@ -61,10 +71,23 @@ contract Connector is AccessControl {
         aavePool.withdraw(token, amount, recepient);
     }
 
+    function setRewardThresholdToLock(
+        uint256 _rewardThresholdToLock
+    ) external onlyRole(MORPHEUS_LISTENER) {
+        rewardThresholdToLock = _rewardThresholdToLock;
+    }
+
+    function setRewardReceiver(
+        address _rewardReceiver
+    ) external onlyRole(MORPHEUS_LISTENER) {
+        require(_rewardReceiver != address(0));
+        rewardReceiver = _rewardReceiver;
+    }
+
     /**
      * @notice function that is used to deposit protocol revenue to Morpheus
      */
-    function exchangeForStEthAndDepositToMorpheusDistributorV4(
+    function saveStEth(
         address token,
         uint256 amount
     ) external onlyRole(CORE_ROLE) {
@@ -81,5 +104,66 @@ contract Connector is AccessControl {
 
         uint256 amountOut = uniswapV3Router.exactInput(params);
         protocolStETHAmount += amountOut;
+
+        _increaseLastMorpheusInteractionTime();
+    }
+
+    function stakeInMorpheusDistributorV4(
+        uint256 poolId,
+        uint256 amount
+    ) external onlyRole(MORPHEUS_LISTENER) {
+        protocolStETHAmount -= amount; // need to reduce amount as this contract can store other user tokens which means malicious "MORPHEUS_LISTENER" can deposit other user tokens and later withdraw them without any problem
+
+        IERC20(stETHAddress).approve(address(morpheusDistributorV4), amount);
+
+        morpheusDistributorV4.stake(poolId, amount);
+        _increaseLastMorpheusInteractionTime();
+    }
+
+    function lockClaimMorpheusDistributorV4(
+        uint256 poolId,
+        uint128 claimLockEnd
+    ) external onlyRole(MORPHEUS_LISTENER) {
+        uint256 rewards = morpheusDistributorV4.getCurrentUserReward(
+            poolId,
+            address(this)
+        );
+
+        require(
+            rewards >= rewardThresholdToLock,
+            "To low amount of rewards to lock"
+        );
+
+        morpheusDistributorV4.lockClaim(poolId, claimLockEnd);
+
+        _increaseLastMorpheusInteractionTime();
+    }
+
+    function claimRewards(uint256 poolId) external onlyRole(MORPHEUS_LISTENER) {
+        morpheusDistributorV4.claim(poolId, rewardReceiver);
+
+        _increaseLastMorpheusInteractionTime();
+    }
+
+    function withdrawStEthFromDistributorV4(
+        uint256 poolId,
+        uint256 amount
+    ) external onlyRole(MORPHEUS_LISTENER) {
+        require(block.timestamp > lastMorpheusInteractionTime);
+
+        morpheusDistributorV4.withdraw(poolId, amount);
+        protocolStETHAmount += amount;
+    }
+
+    function withdrawStEth(
+        address to,
+        uint256 amount
+    ) external onlyRole(MORPHEUS_LISTENER) {
+        IERC20(stETHAddress).safeTransfer(to, amount);
+    }
+
+    // exist so we can not immediately deposit to morpheus and withdraw tokens providing more reliability for protocol and for us
+    function _increaseLastMorpheusInteractionTime() internal {
+        lastMorpheusInteractionTime += MORPHEUS_WITHDRAW_COOLDOWN;
     }
 }

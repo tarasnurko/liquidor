@@ -2,7 +2,7 @@
 -- STORAGE LAYOUT --
 slot 0          - owner address
 slot 1          - connector address
-slot 2          - protocol stETH savings
+slot 2          - protocol USDT savings
 slot 3          - borrow position counter
 
 slot 0x1000     - mapping(address token => Data)
@@ -10,8 +10,15 @@ slot 0x1000     - mapping(address token => Data)
      0x20       - totalShares                                                    
 
 slot 0x10000    - mapping(address account => mapping(address token => uint256 shares)) userShares
-slot 0x100000   - mapping(uint256 )
-
+slot 0x100000   - mapping(uint256 borrowPositionId => Data)
+     0x00       - account address
+     0x20       - borrowToken
+     0x40       - borrowTokenAmount
+     0x60       - collateralToken
+     0x80       - collateralTokenAmount
+     0xa0       - collateralShares (need to track how much yield was generated)
+     0xc0       - is with APR
+     0xe0       - is date of deposit end
 */
 
 object "Core" {
@@ -163,7 +170,7 @@ object "Core" {
                     
                     then for health use default formula for health factor
                     
-                    in that case use LTV 101%%
+                    in that case use LTV 99% (1% is gap for liquidation)
 
                     and with that user have additional health factor from generated yield
 
@@ -207,9 +214,26 @@ object "Core" {
                 // TODO: save borrow position
             }
 
-            function getHealthFactor() -> v {}
+            function getHealthFactor(borrowPosition) -> v {
+                /*
+                    because we want to be best, we allow user to have as much LTV as 99%
+                    1% is saved for liquidation and liquidator rewards
+                */
+            }
 
             function liquidate() {}
+
+            /**
+             * @notice function that makes this protocol unique
+            */
+            function borrowWithPresettedAPR(borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount) {
+                let ltvForDefaultBorrowing := mul(80, WAD()) // LTV is 80%, scaled to 1e18
+
+                // Calculate the maximum allowed borrow price based on LTV (80% of collateral value)
+                let maxBorrowAllowed := mulDivDown(collateralPrice, ltvForDefaultBorrowing, mul(100, WAD()))
+
+                require(lt(borrowPrice, maxBorrowAllowed))
+            }
 
             /****************************************/
             /*             Storage layout           */
@@ -461,6 +485,16 @@ object "Core" {
  
                 v := mload(0x00)
             }
+
+            /**
+             * @notice excute swap inside Connector to swap token for USDT
+            */
+            function convertToUSDT(token, amount) -> v {}
+
+            /**
+             * @notice 50% of protocol fee goes to Connector when in is exchanged for stETH which is later deposited to Morpheus Distributor V4
+            */
+            function saveStEth(token, amount) {}
 
             /****************************************/
             /*                 Price                */
