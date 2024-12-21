@@ -66,6 +66,17 @@ object "Core" {
 
                 seems good
             */
+
+           // TODO: WITHDRAW TOKENS FROM USER
+
+           let sharesAmount := convertToShares(token, amount)
+
+            addTokenDeposits(token, amount)
+            addTokenShares(token, sharesAmount)
+
+            addAccountTokenShares(caller(), token, shares)
+
+            // TODO: DEPOSIT TO AAVE
         }   
 
         function withdraw(token, shares) {
@@ -79,6 +90,19 @@ object "Core" {
             // 5. convertToShares `shares` and send user 
             // 6. reduce speified amount from user balance
 
+            let userSharesBalance = accountTokenShares(caller(), token)
+
+            // check that user have enough smount of shares on balance, i.e. if shares > balance
+            // - if userSharesBalance < shares -> 1 -> iszero(1) -> false -> revert
+            // - if userSharesBalance >= shares -> 0 -> iszero(0) -> true -> not revert
+            require(iszero(lt(userSharesBalance, shares)))
+            
+            // TODO: add logic to calculate shares -> assets
+            // add logic to calculate profit (earned yield per user shares)
+
+            // TODO: reduce total token deposits and shares
+
+            reduceAccountTokenShares(caller(), token, shares)
         }
 
         function borrow(borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount) {
@@ -187,7 +211,7 @@ object "Core" {
         }
 
         /****************************************/
-        /*            Storage changes           */
+        /*        Storage modifications         */
         /****************************************/
 
         /**
@@ -228,6 +252,30 @@ object "Core" {
             offset := accountTokenToSharesStorageOffset(account, token)
             prevValue := accountTokenShares(account, token)
             sstore(offset, sub(prevValue, amount))
+        }
+
+        /****************************************/
+        /*     Shares logic (ERC4626 like)      */
+        /****************************************/
+
+        /**
+         * @param token address of token
+         * @param assets amount of assets to convert to shares
+         */
+        function convertToShares(token, assets) -> v {
+            let totalAssets := tokenDeposits(token)
+            let totalShares := tokenShares(token)
+
+            // (assets * (totalShares + 1)) / totalAssets
+            v := mulDivUp(assets, add(totalShares, 1), totalAssets)
+        }
+
+        function convertToShares(token, shares) -> v {
+            let totalAssets := tokenDeposits(token)
+            let totalShares := tokenShares(token)
+
+            // (shares * (totalAssets + 1)) / totalShares
+            v := mulDivDown(shares, add(totalAssets, 1), totalShares)
         }
 
         /****************************************/
@@ -282,6 +330,30 @@ object "Core" {
             mstore(0x00, key) 
             mstore(0x20, mappingOffset)  
             offset := keccak256(0x00, 0x40)
+        }
+
+        /****************************************/
+        /*                Math                  */
+        /****************************************/
+
+        // x * y / denominator
+        // Rounded up
+        // https://github.com/transmissions11/solmate/blob/c93f7716c9909175d45f6ef80a34a650e2d24e56/src/utils/FixedPointMathLib.sol#L53-L69
+        function mulDivUp(x, y, denominator) -> v {
+            if iszero(mul(denominator, iszero(mul(y, gt(x, div(not(0), y)))))) {
+                revert(0, 0)
+            }
+            v := add(gt(mod(mul(x, y), denominator), 0), div(mul(x, y), denominator))
+        }
+
+        // x * y / denominator
+        // Rounded down
+        // https://github.com/transmissions11/solmate/blob/c93f7716c9909175d45f6ef80a34a650e2d24e56/src/utils/FixedPointMathLib.sol#L36-L51
+        function mulDivDown(x, y, denominator) -> v {
+            if iszero(mul(denominator, iszero(mul(y, gt(x, div(not(0), y)))))) {
+                revert(0, 0)
+            }
+            v := div(mul(x, y), denominator)
         }
     }
 }
