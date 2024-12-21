@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
-import "@uniswap/v3-core/contracts/libraries/FullMath.sol";
-import "@uniswap/v3-core/contracts/libraries/FixedPoint96.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
-import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
-
-interface IERC20 {
-    function decimals() external view returns (uint8);
-}
+import {IUniswapV3Pool} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
+import {FullMath} from "@uniswap/v3-core/contracts/libraries/FullMath.sol";
+import {FixedPoint96} from "@uniswap/v3-core/contracts/libraries/FixedPoint96.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {TickMath} from "@uniswap/v3-core/contracts/libraries/TickMath.sol";
+import {IUniswapV3Factory} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 contract UniswapV3TWAPOracle is Ownable {
     IUniswapV3Factory public uniswapV3Factory;
@@ -70,13 +67,15 @@ contract UniswapV3TWAPOracle is Ownable {
         );
 
         if (token == IUniswapV3Pool(pool).token0()) {
-            price = price / (10 ** (18 - IERC20(usdtAddress).decimals()));
+            price =
+                price /
+                (10 ** (18 - IERC20Metadata(usdtAddress).decimals()));
         } else {
             price =
                 price /
                 (10 **
                     (18 -
-                        IERC20(address(IUniswapV3Pool(pool).token1()))
+                        IERC20Metadata(address(IUniswapV3Pool(pool).token1()))
                             .decimals()));
         }
 

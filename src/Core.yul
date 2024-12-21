@@ -21,6 +21,10 @@ slot 0x100000   - mapping(uint256 borrowPositionId => Data)
      0xe0       - is date of deposit end
 */
 
+
+/**
+ * @dev if you review this contract do not believe everething that comments are saying. Not structured non-natspec huge comments are just thought process
+*/
 object "Core" {
     code {
         // return the bytecode of the contract
@@ -40,7 +44,7 @@ object "Core" {
 
             // to get function signature use "cast sig"
             switch selector
-            case 0x8da5cb5b {
+            case 0x8da5cb5b { // owner()
                 mstore(0x00, owner())
                 return(0x00, 0x20)
             }
@@ -189,12 +193,15 @@ object "Core" {
 
                 // health factor or borrow = 
                 // collateral (USDT value) * LTV (for borrow it's 80%)
-                // ---------------------------------------------------- > 1
+                // ----------------------------------------------------
                 //             borrow tokens (in USDT)
 
                 // 3. withdraw token necessary amount from AAVE
                 // 4. send those withdrawed tokens to user
                 // 5. save borrow position to storage 
+
+                let borrowPrice := getTokenAmountPrice(borrowToken, borrowTokenAmount)
+                let collateralPrice := getTokenAmountPrice(collateralToken, collateralTokenAmount)
 
                 let ltvForDefaultBorrowing := mul(80, WAD()) // LTV is 80%, scaled to 1e18
 
@@ -211,28 +218,51 @@ object "Core" {
                 addTokenDeposits(collateralToken, collateralTokenAmount)
                 addTokenShares(collateralToken, collateralShares)
                 
-                // TODO: save borrow position
+                setBorrowPosition(caller(), borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount, collateralShares, 0x00, 0x00)
             }
 
-            function getHealthFactor(borrowPosition) -> v {
+            function getHealthFactor(positionId) -> v {
                 /*
                     because we want to be best, we allow user to have as much LTV as 99%
                     1% is saved for liquidation and liquidator rewards
                 */
+
+                let := borrower, borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount, collateralShares, aprAtBorrow, deadline = readBorrowPosition(id)
+
+                require(not(iszero(borrower))) // position is not empty
+
+                let currentTimestamp := timestampFunction()
+
+                // Get borrow and collateral prices
+                let borrowPrice := getTokenAmountPrice(borrowToken, borrowTokenAmount)
+                let collateralPrice := getTokenAmountPrice(collateralToken, collateralTokenAmount)
+
+                // Initialize collateral APR value
+                let collateralAprValue := 0
+
+                // Check if we are within the APR calculation period
+                if lt(currentTimestamp, deadline) {
+                    // Calculate APR value
+                    if isWithAPR {
+                        let apr := getAavePoolApy(collateralToken)           // Get 30-day APR scaled to 1e18
+                        collateralAprValue := div(mul(collateralPrice, apr), 1e18)
+                    }
+                }
+
+                // Total collateral value including APR adjustment
+                let adjustedCollateral := add(collateralPrice, collateralAprValue)
+
+                // Health factor formula
+                healthFactor := div(adjustedCollateral, borrowPrice)
             }
 
-            function liquidate() {}
+            function liquidate(id) { }
 
             /**
-             * @notice function that makes this protocol unique
+             * @notice function that makes this protocol unique, borrow tokens with additional health because of APR gains of collateral token is immediately added to user healsh
             */
             function borrowWithPresettedAPR(borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount) {
-                let ltvForDefaultBorrowing := mul(80, WAD()) // LTV is 80%, scaled to 1e18
-
-                // Calculate the maximum allowed borrow price based on LTV (80% of collateral value)
-                let maxBorrowAllowed := mulDivDown(collateralPrice, ltvForDefaultBorrowing, mul(100, WAD()))
-
-                require(lt(borrowPrice, maxBorrowAllowed))
+                // TODO: check protocol have enough protection in USDT for case when apr oracle miscalculated gains
             }
 
             /****************************************/
@@ -241,6 +271,7 @@ object "Core" {
 
             function ownerPos() -> p { p := 0 }
             function connectorPos() -> p { p := 1 }
+            function nextBorrowIdPos() -> { p := 3 }
 
             /* --- Tokens --- */
 
@@ -262,6 +293,12 @@ object "Core" {
                 offset := getNestedMappingOffset(offset, account)
             }
 
+            /* --- Borrow positions --- */
+            // borrower address
+            function borrowPositionidToStorageOffset(id) -> offset {
+                offset := getMappingOffset(0x100000, id)
+            }    
+
             /****************************************/
             /*             Storage read             */
             /****************************************/
@@ -274,6 +311,10 @@ object "Core" {
 
             function connector() -> v {
                 v := sload(connectorPos())
+            }
+
+            function nextBorrowId() -> v {
+                v := sload(nextBorrowIdPos())
             }
 
             // total token deposits
@@ -294,6 +335,21 @@ object "Core" {
                 v := sload(offset)
             }
 
+            /* --- Borrow positions --- */
+
+            function readBorrowPosition(id) -> borrower, borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount, collateralShares, aprAtBorrow, deadline {
+                let offset := borrowPositionidToStorageOffset(id);
+
+                borrower := sload(offset)
+                borrowToken := sload(add(0x20, offset))
+                borrowTokenAmount := sload(add(0x40, offset))
+                collateralToken := sload(add(0x60, offset))
+                collateralTokenAmount := sload(add(0x80, offset))
+                collateralShares :=  sload(add(0xa0, offset))
+                aprAtBorrow :=  sload(add(0xc0, offset))
+                deadline := sload(add(0xe0, offset))
+            }
+
             /****************************************/
             /*        Storage modifications         */
             /****************************************/
@@ -304,6 +360,11 @@ object "Core" {
 
             function setConnector(addr) {
                 sstore(connectorPos(), addr)
+            }
+
+            function incrementBorrowId() {
+                let prevValue := nextBorrowId()
+                sstore(nextBorrowIdPos(), add(prevValue, 1))
             }
 
             /**
@@ -338,7 +399,6 @@ object "Core" {
                 sstore(offset, sub(prevValue, amount))
             }
 
-
             /* --- Account shares --- */  
 
             /**
@@ -350,6 +410,7 @@ object "Core" {
                 sstore(offset, add(prevValue, amount))
             }
 
+            
             /**
              * @param amount - amount of shares to reduce from account in specified token
             */
@@ -357,6 +418,21 @@ object "Core" {
                 let offset := accountTokenToSharesStorageOffset(account, token)
                 let prevValue := accountTokenShares(account, token)
                 sstore(offset, sub(prevValue, amount))
+            }
+
+            /* --- Borrow positions --- */
+
+            function setBorrowPosition(borrower, borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount, collateralShares, aprAtBorrow, deadline) {
+                let offset := borrowPositionidToStorageOffset(id);
+
+                sstore(offset, borrower)
+                sstore(add(0x20, offset), borrowToken)
+                sstore(add(0x40, offset), borrowTokenAmount)
+                sstore(add(0x60, offset), collateralToken)
+                sstore(add(0x80, offset), collateralTokenAmount)
+                sstore(add(0xa0, offset), collateralShares)
+                sstore(add(0xc0, offset), aprAtBorrow)
+                sstore(add(0xe0, offset), deadline)
             }
 
             /****************************************/
@@ -387,6 +463,9 @@ object "Core" {
             /*               Connector              */
             /****************************************/
 
+            /**
+             * @notice make call to Connector.deposit()
+            */
             function depositToAave(depositor, token, amount) {
                 let ptr := mload(0x40)
                 
@@ -419,6 +498,9 @@ object "Core" {
                 }
             }
 
+            /**
+             * @notice make call to Connector.withdraw()
+            */
             function withdrawFromAave(depositor, token, amount) {
                 let ptr := mload(0x40)
                 
@@ -451,6 +533,9 @@ object "Core" {
                 }
             }
 
+            /**
+             * @notice make call to Connector.getATokenBalance()
+            */
             function getATokenBalance(token) -> v {  
                 // clear slots before usage
                 mstore(0x00, 0)
@@ -501,17 +586,24 @@ object "Core" {
             /****************************************/
 
             /**
-             * @notice get price scaled to 1e18
+             * @notice make call to PriceOracle to retrieve price for token in USDT
+             * @dev price is scaled to 1e18
             */
             function getScaledPrice(token) -> v {
                 // TODO: call to price oracle
             }
 
+            /**
+             * @notice returns token price in USDT for specified amount
+            */
             function getTokenAmountPrice(token, amount) -> v {
                 let price := getScaledPrice(token)
                 v := mulDivDown(price, amount, WAD())
             }
 
+            /**
+             * @notice make request to own oracle that retrieves approximate downgraded APR for 30 days
+            */
             function getAavePoolApy(token) -> v {}
 
             /****************************************/
