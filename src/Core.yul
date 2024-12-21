@@ -256,13 +256,17 @@ object "Core" {
                 healthFactor := div(adjustedCollateral, borrowPrice)
             }
 
-            function liquidate(id) { }
+            function liquidate(id) { 
+                // liquidation disallowed for healthy positions
+                require(not(lt(getHealthFactor(id), WAD())))
+            }
 
             /**
              * @notice function that makes this protocol unique, borrow tokens with additional health because of APR gains of collateral token is immediately added to user healsh
             */
             function borrowWithPresettedAPR(borrowToken, borrowTokenAmount, collateralToken, collateralTokenAmount) {
                 // TODO: check protocol have enough protection in USDT for case when apr oracle miscalculated gains
+
             }
 
             /****************************************/
@@ -271,6 +275,7 @@ object "Core" {
 
             function ownerPos() -> p { p := 0 }
             function connectorPos() -> p { p := 1 }
+            function protectionUsdtAmountPos() -> p { p := 3 }
             function nextBorrowIdPos() -> { p := 3 }
 
             /* --- Tokens --- */
