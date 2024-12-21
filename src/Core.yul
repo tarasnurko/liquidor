@@ -3,12 +3,14 @@
 slot 0          - owner address
 slot 1          - connector address
 slot 2          - protocol stETH savings
+slot 3          - borrow position counter
 
 slot 0x1000     - mapping(address token => Data)
      0x00       - totalDeposits
      0x20       - totalShares                                                    
 
 slot 0x10000    - mapping(address account => mapping(address token => uint256 shares)) userShares
+slot 0x100000   - mapping(uint256 )
 
 */
 
@@ -148,7 +150,7 @@ object "Core" {
                         - increase total token shares
                         - save position shares
                     
-                    allow user to deposit tokens only if it's 120% of LTV (in USDT)
+                    allow user to deposit tokens only if it's 80% of LTV (in USDT)
                     to retrieve price probably use Uniswap v3 Price oracle
 
                     send necessary amount of borrowToken to user
@@ -161,7 +163,7 @@ object "Core" {
                     
                     then for health use default formula for health factor
                     
-                    in that case use LTV 101%
+                    in that case use LTV 101%%
 
                     and with that user have additional health factor from generated yield
 
@@ -173,21 +175,41 @@ object "Core" {
                     and protocol would get all generated yield
                     in that case most of yield goes to users 
                     and fee (5%) goes to safe guard
-
                 */
 
                 // 1. check that for existing tokens there is available amount
                 // 2. check health factor 
 
                 // health factor or borrow = 
-                // collateral (USDT value) * LTV (for borrow it's 120%)
+                // collateral (USDT value) * LTV (for borrow it's 80%)
                 // ---------------------------------------------------- > 1
                 //             borrow tokens (in USDT)
 
                 // 3. withdraw token necessary amount from AAVE
                 // 4. send those withdrawed tokens to user
                 // 5. save borrow position to storage 
+
+                let ltvForDefaultBorrowing := mul(80, WAD()) // LTV is 80%, scaled to 1e18
+
+                // Calculate the maximum allowed borrow price based on LTV (80% of collateral value)
+                let maxBorrowAllowed := mulDivDown(collateralPrice, ltvForDefaultBorrowing, mul(100, WAD()))
+
+                require(lt(borrowPrice, maxBorrowAllowed))
+
+                withdrawFromAave(caller(), borrowToken, borrowTokenAmount)
+
+                let collateralShares := convertToShares(collateralToken, collateralTokenAmount)
+
+                depositToAave(collateralToken, collateralTokenAmount)
+                addTokenDeposits(collateralToken, collateralTokenAmount)
+                addTokenShares(collateralToken, collateralShares)
+                
+                // TODO: save borrow position
             }
+
+            function getHealthFactor() -> v {}
+
+            function liquidate() {}
 
             /****************************************/
             /*             Storage layout           */
@@ -356,8 +378,8 @@ object "Core" {
                 
                 // Make the call
                 let success := call(
-                    gas(),            // gas
-                    connector(),  // target contract
+                    gas(),           // gas
+                    connector(),     // target contract
                     0,               // no ETH value
                     ptr,             // input pointer
                     0x64,            // input size (4 + 32 * 3 = 100 bytes)
@@ -388,8 +410,8 @@ object "Core" {
                 
                 // Make the call
                 let success := call(
-                    gas(),            // gas
-                    connector(),  // target contract
+                    gas(),           // gas
+                    connector(),     // target contract
                     0,               // no ETH value
                     ptr,             // input pointer
                     0x64,            // input size (4 + 32 * 3 = 100 bytes)
@@ -439,6 +461,24 @@ object "Core" {
  
                 v := mload(0x00)
             }
+
+            /****************************************/
+            /*                 Price                */
+            /****************************************/
+
+            /**
+             * @notice get price scaled to 1e18
+            */
+            function getScaledPrice(token) -> v {
+                // TODO: call to price oracle
+            }
+
+            function getTokenAmountPrice(token, amount) -> v {
+                let price := getScaledPrice(token)
+                v := mulDivDown(price, amount, WAD())
+            }
+
+            function getAavePoolApy(token) -> v {}
 
             /****************************************/
             /*     Calldata decoding functions      */
